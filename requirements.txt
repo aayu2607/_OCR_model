@@ -1,4 +1,4 @@
-torchl
+torch
 git+https://github.com/huggingface/transformers
 qwen-vl-utils
 streamlit
