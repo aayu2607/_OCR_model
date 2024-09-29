@@ -1,32 +1,21 @@
 import streamlit as st
-from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
+from transformers import Qwen2VLForConditionalGeneration, AutoProcessor, TextIteratorStreamer
 from qwen_vl_utils import process_vision_info
 import torch
 from PIL import Image
+from threading import Thread
 
-# Load model on CPU
-model = Qwen2VLForConditionalGeneration.from_pretrained(
-    "Qwen/Qwen2-VL-2B-Instruct", torch_dtype=torch.float32, device_map=None
-).to("cpu")  # Ensure the model is on CPU
+@st.cache_resource
+def load_model():
+    model = Qwen2VLForConditionalGeneration.from_pretrained(
+        "Qwen/Qwen2-VL-2B-Instruct", torch_dtype=torch.float32, device_map=None
+    ).to("cpu")
+    min_pixels = 256*28*28
+    max_pixels = 1280*28*28
+    processor = AutoProcessor.from_pretrained("Qwen/Qwen2-VL-2B-Instruct", min_pixels=min_pixels, max_pixels=max_pixels)
+    return model, processor
 
-min_pixels = 256*28*28
-max_pixels = 1280*28*28
-processor = AutoProcessor.from_pretrained("Qwen/Qwen2-VL-2B-Instruct", min_pixels=min_pixels, max_pixels=max_pixels)
-
-# Streamlit app
-st.title("OCR Application with Keyword Search")
-
-# Upload image
-uploaded_file = st.file_uploader("Choose an image...", type=["png", "jpg", "jpeg"])
-
-if uploaded_file is not None:
-    # Convert the uploaded file to an image
-    img = Image.open(uploaded_file)
-
-    # Display the uploaded image
-    st.image(img, caption="Uploaded Image", use_column_width=True)
-
-    # Prepare the image for the model
+def process_file_streaming(img, model, processor):
     messages = [
         {
             "role": "system",
@@ -37,7 +26,7 @@ if uploaded_file is not None:
             "content": [
                 {
                     "type": "image",
-                    "image": img,  # Pass the image object directly
+                    "image": img,
                 },
                 {
                     "type": "text",
@@ -47,7 +36,6 @@ if uploaded_file is not None:
         }
     ]
 
-    # Process the image for inference
     text = processor.apply_chat_template(
         messages, tokenize=False, add_generation_prompt=True
     )
@@ -59,28 +47,71 @@ if uploaded_file is not None:
         padding=True,
         return_tensors="pt",
     )
-    inputs = inputs.to("cpu")  # Send the inputs to CPU
+    inputs = inputs.to("cpu")
 
-    # Inference on CPU
-    generated_ids = model.generate(**inputs, max_new_tokens=200)
-    generated_ids_trimmed = [
-        out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
-    ]
-    output_text = processor.batch_decode(
-        generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
-    )
-    
-    # Display the extracted text
-    extracted_text = output_text[0]
-    st.subheader("Extracted Text")
-    st.write(extracted_text)
+    # Stream tokens
+    streamer = TextIteratorStreamer(processor.tokenizer, skip_prompt=True, skip_special_tokens=True)
+    generation_kwargs = dict(inputs, streamer=streamer, max_new_tokens=600)
 
-    # Keyword Search
-    keyword = st.text_input("Enter keyword to search in the extracted text")
-    if keyword:
-        if keyword.lower() in extracted_text.lower():
-            highlighted_text = extracted_text.replace(keyword, f"**{keyword}**")
-            st.subheader("Keyword Found")
-            st.write(highlighted_text, unsafe_allow_html=True)
-        else:
-            st.write("Keyword not found in the extracted text.")
+    thread = Thread(target=model.generate, kwargs=generation_kwargs)
+    thread.start()
+
+    return streamer
+
+# Load model and processor once
+model, processor = load_model()
+
+# Streamlit app
+st.title("OCR Application with Real-Time Token Streaming")
+
+# Initialize session state variables
+if 'current_image' not in st.session_state:
+    st.session_state.current_image = None
+if 'extracted_text' not in st.session_state:
+    st.session_state.extracted_text = None
+
+# Upload image
+uploaded_file = st.file_uploader("Choose an image...", type=["png", "jpg", "jpeg"])
+
+if uploaded_file is not None:
+    # Convert the uploaded file to an image
+    img = Image.open(uploaded_file)
+
+    # Display the uploaded image
+    st.image(img, caption="Uploaded Image", use_column_width=True)
+
+    # Check if the uploaded image is different from the current one
+    if st.session_state.current_image != uploaded_file:
+        st.session_state.current_image = uploaded_file
+        
+        # Process the image with streaming
+        streamer = process_file_streaming(img, model, processor)
+        
+        # Display streaming results
+        st.subheader("Extracted Text (Streaming)")
+        text_placeholder = st.empty()
+        collected_text = ""
+        
+        for new_text in streamer:
+            collected_text += new_text
+            text_placeholder.markdown(collected_text)
+        
+        # Store the final extracted text
+        st.session_state.extracted_text = collected_text
+
+    else:
+        # Display the previously extracted text
+        st.subheader("Extracted Text")
+        st.write(st.session_state.extracted_text)
+
+# Keyword Search
+keyword = st.text_input("Enter keyword to search in the extracted text")
+if keyword and st.session_state.extracted_text:
+    if keyword.lower() in st.session_state.extracted_text.lower():
+        highlighted_text = st.session_state.extracted_text.replace(keyword, f"**{keyword}**")
+        st.subheader("Keyword Found")
+        st.markdown(highlighted_text)
+    else:
+        st.write("Keyword not found in the extracted text.")
+elif keyword:
+    st.write("Please upload an image first before searching.")
