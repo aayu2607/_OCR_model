@@ -1,4 +1,5 @@
 torch
+torchvision
 git+https://github.com/huggingface/transformers
 qwen-vl-utils
 streamlit
