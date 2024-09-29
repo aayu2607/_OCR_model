@@ -1,25 +1,31 @@
 import streamlit as st
-import torch
+from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
 from qwen_vl_utils import process_vision_info
-from transformers import AutoProcessor, Qwen2VLForConditionalGeneration
+import torch
+from PIL import Image
 
+# Load model
+model = Qwen2VLForConditionalGeneration.from_pretrained(
+    "Qwen/Qwen2-VL-2B-Instruct", torch_dtype="auto", device_map="auto"
+)
+min_pixels = 256*28*28
+max_pixels = 1280*28*28
+processor = AutoProcessor.from_pretrained("Qwen/Qwen2-VL-2B-Instruct", min_pixels=min_pixels, max_pixels=max_pixels)
 
-# Load the model and processor
-@st.cache_resource  # Cache the model for faster loading
-def load_model():
-    model = Qwen2VLForConditionalGeneration.from_pretrained(
-        "Qwen/Qwen2-VL-2B-Instruct", torch_dtype="auto", device_map="auto"
-    )
-    min_pixels = 256*28*28
-    max_pixels = 1280*28*28
-    processor = AutoProcessor.from_pretrained(
-        "Qwen/Qwen2-VL-2B-Instruct", min_pixels=min_pixels, max_pixels=max_pixels
-    )
-    return model, processor
+# Streamlit app
+st.title("OCR Application with Keyword Search")
 
-model, processor = load_model()
+# Upload image
+uploaded_file = st.file_uploader("Choose an image...", type=["png", "jpg", "jpeg"])
 
-def extract_text(image):
+if uploaded_file is not None:
+    # Convert the uploaded file to an image
+    img = Image.open(uploaded_file)
+
+    # Display the uploaded image
+    st.image(img, caption="Uploaded Image", use_column_width=True)
+
+    # Prepare the image for the model
     messages = [
         {
             "role": "system",
@@ -30,21 +36,23 @@ def extract_text(image):
             "content": [
                 {
                     "type": "image",
-                    "image": image,
+                    "image": img,  # Pass the image object directly
                 },
                 {
                     "type": "text",
-                    "text": "Read and extract ALL text visible in this image. Provide ONLY the actual words, numbers, and characters you see, exactly as they appear. If the text is in Hindi, give the output in Hindi characters. If the text is in English, give the output in English."
+                    "text": "Read and extract ALL text visible in this image. Provide ONLY the actual words, numbers, and characters you see, exactly as they appear."
                 },
             ],
         }
     ]
 
-    # Prepare inputs
-    text_input = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    # Process the image for inference
+    text = processor.apply_chat_template(
+        messages, tokenize=False, add_generation_prompt=True
+    )
     image_inputs, video_inputs = process_vision_info(messages)
     inputs = processor(
-        text=[text_input],
+        text=[text],
         images=image_inputs,
         videos=video_inputs,
         padding=True,
@@ -52,7 +60,7 @@ def extract_text(image):
     )
     inputs = inputs.to("cuda")
 
-    # Inference to generate text
+    # Inference
     generated_ids = model.generate(**inputs, max_new_tokens=200)
     generated_ids_trimmed = [
         out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
@@ -60,32 +68,18 @@ def extract_text(image):
     output_text = processor.batch_decode(
         generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
     )
-    return output_text[0]
-
-def highlight_keywords(text, keyword):
-    # Case-insensitive highlighting of the keyword
-    highlighted_text = text.replace(keyword, f"**{keyword}**")
-    return highlighted_text
-
-# Streamlit app layout
-st.title("OCR Web Application")
-st.write("Upload an image to extract text, and search for specific keywords.")
-
-# File upload
-uploaded_image = st.file_uploader("Upload an image", type=["png", "jpg", "jpeg"])
-
-if uploaded_image:
-    # Extract text from image
-    with st.spinner('Extracting text...'):
-        extracted_text = extract_text(uploaded_image)
-
-    # Display extracted text
-    st.subheader("Extracted Text:")
+    
+    # Display the extracted text
+    extracted_text = output_text[0]
+    st.subheader("Extracted Text")
     st.write(extracted_text)
 
-    # Keyword search and highlighting
-    keyword = st.text_input("Enter keyword to highlight")
+    # Keyword Search
+    keyword = st.text_input("Enter keyword to search in the extracted text")
     if keyword:
-        st.subheader("Text with Highlighted Keywords:")
-        highlighted_text = highlight_keywords(extracted_text, keyword)
-        st.markdown(highlighted_text)
+        if keyword.lower() in extracted_text.lower():
+            highlighted_text = extracted_text.replace(keyword, f"**{keyword}**")
+            st.subheader("Keyword Found")
+            st.write(highlighted_text, unsafe_allow_html=True)
+        else:
+            st.write("Keyword not found in the extracted text.")
