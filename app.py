@@ -4,10 +4,11 @@ from qwen_vl_utils import process_vision_info
 import torch
 from PIL import Image
 
-# Load model
+# Load model on CPU
 model = Qwen2VLForConditionalGeneration.from_pretrained(
-    "Qwen/Qwen2-VL-2B-Instruct", torch_dtype="auto", device_map="auto"
-)
+    "Qwen/Qwen2-VL-2B-Instruct", torch_dtype=torch.float32, device_map=None
+).to("cpu")  # Ensure the model is on CPU
+
 min_pixels = 256*28*28
 max_pixels = 1280*28*28
 processor = AutoProcessor.from_pretrained("Qwen/Qwen2-VL-2B-Instruct", min_pixels=min_pixels, max_pixels=max_pixels)
@@ -58,9 +59,9 @@ if uploaded_file is not None:
         padding=True,
         return_tensors="pt",
     )
-    inputs = inputs.to("cuda")
+    inputs = inputs.to("cpu")  # Send the inputs to CPU
 
-    # Inference
+    # Inference on CPU
     generated_ids = model.generate(**inputs, max_new_tokens=200)
     generated_ids_trimmed = [
         out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
