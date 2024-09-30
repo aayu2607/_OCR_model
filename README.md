@@ -86,4 +86,11 @@ Remember to update your `requirements.txt` file if you make any changes to your 
 - The application uses CPU for inference by default. If you have a CUDA-capable GPU available on your deployment platform, you can modify the `device_map` and `to()` calls in `app.py` to use GPU acceleration.
 - The model and processor are cached using Streamlit's `@st.cache_resource` decorator to improve performance on subsequent runs.
 
+#DEMO IMAGE
+![Ocr Model - a Hugging Face Space by ayush2607](https://github.com/user-attachments/assets/95c23f5d-e2b4-4583-acf7-8c494cb5cd0b)
+
+
+
+
 Check out the configuration reference at https://huggingface.co/docs/hub/spaces-config-reference
+
